@@ -64,6 +64,7 @@ def get_record(host, valid_list):
 
 def create_connection(url: str = None) -> docker.client:
     """Create docker connection return client"""
+    print(url)
     try:
         if url:
             clnt = docker.DockerClient(base_url=url)
@@ -149,35 +150,33 @@ def get_dns_configuration() -> dict:
 
 
 def main():
-    """Main method to manage Docker containers."""
+    """Main method to manage Docker containers using Docker event stream."""
     env_vars = get_dns_configuration()
+    clnt = create_connection(env_vars['docker'])
+    ddns_client = rfc2136.Ddns(
+        env_vars["dns_host"],
+        env_vars["dns_port"],
+        env_vars["tsig_name"],
+        env_vars["tsig_key"],
+        env_vars["tsig_algo"],
+    )
 
-    while True:
-        clnt = create_connection(env_vars['docker'])
-        containers = clnt.containers.list()
-
-        # Process containers and filter valid results
-        valid_records = [
-            process_container(container, env_vars["valid_domains_list"])
-            for container in containers
-            if process_container(container, env_vars["valid_domains_list"]) is not None
-        ]
-
-        ddns_client = rfc2136.Ddns(
-            env_vars["dns_host"],
-            env_vars["dns_port"],
-            env_vars["tsig_name"],
-            env_vars["tsig_key"],
-            env_vars["tsig_algo"],
-        )
-
-        process_record(valid_records, ddns_client, env_vars["host_ip"])
-
-        if env_vars["polling"] < 1:
-            logger.info("Polling disabled exiting")
-            break
-
-        time.sleep(env_vars["polling"])
+    logger.info("Listening for Docker container start events...")
+    try:
+        for event in clnt.events(decode=True):
+            if event.get("Type") == "container" and event.get("Action") == "start":
+                container_id = event["id"]
+                try:
+                    container = clnt.containers.get(container_id)
+                    result = process_container(container, env_vars["valid_domains_list"])
+                    if result:
+                        process_record([result], ddns_client, env_vars["host_ip"])
+                        logger.info(f"Processed DNS for started container: {container.name}")
+                except Exception as e:
+                    logger.error(f"Error processing container {container_id}: {e}")
+    except KeyboardInterrupt:
+        logger.info("Shutting down event listener.")
+        sys.exit(0)
 
 
 if __name__ == "__main__":

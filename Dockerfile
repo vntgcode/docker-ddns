@@ -10,5 +10,5 @@ COPY . /app
 # Run the command to install any necessary dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Run hello.py when the container launches
+# Run the event-driven DNS updater when the container launches
 CMD ["python", "app/ddns.py"]
